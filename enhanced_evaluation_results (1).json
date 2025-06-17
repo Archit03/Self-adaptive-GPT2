@@ -1,0 +1,77 @@
+{
+  "cem_results": [
+    {
+      "input": "What is the capital of France?",
+      "task_type": "qa",
+      "generated": "What is the capital of France?\nThe French government has given a green light to foreign investors in order for them, which means that they can invest up until 2020. This includes any money from abroad and will help us develop our infrastructure",
+      "cem_score": -2.884413003921509,
+      "convergence_steps": 50,
+      "adaptation_time": 0.9999997615814209
+    },
+    {
+      "input": "This movie was absolutely amazing!",
+      "task_type": "sentiment",
+      "generated": "This movie was absolutely amazing! The art style and the visuals are great. I love how they use animation to create characters, which is really cool because it's so easy for people like me who don't know much about anime or",
+      "cem_score": -4.069433689117432,
+      "convergence_steps": 50,
+      "adaptation_time": 0.9999997615814209
+    },
+    {
+      "input": "Summarize: Climate change is a major global challenge affecting weather patterns...",
+      "task_type": "summarization",
+      "generated": "Summarize: Climate change is a major global challenge affecting weather patterns...\nThe \"Hockey Stick\" (a.k., hockey stick) was invented by the late Austrian scientist Karl Popper, who in 1849 wrote The Hockeystick Theory of Variability and Change",
+      "cem_score": -3.867624282836914,
+      "convergence_steps": 50,
+      "adaptation_time": 0.9999992847442627
+    },
+    {
+      "input": "The future of technology looks bright",
+      "task_type": "general",
+      "generated": "The future of technology looks bright for a number, but it's hard to imagine any one company taking the lead in this area.\n\"We're not going anywhere,\" said Scott Langerberg, who heads up research at IBM",
+      "cem_score": -3.735250473022461,
+      "convergence_steps": 50,
+      "adaptation_time": 0.9999995231628418
+    }
+  ],
+  "timestamp": "2025-06-16T18:45:54.225675",
+  "config": {
+    "model_name": "gpt2",
+    "batch_size": 16,
+    "learning_rate": 5e-05,
+    "num_epochs": 5,
+    "max_length": 256,
+    "adaptation_rank": 32,
+    "num_experts": 8,
+    "mixed_precision": false,
+    "gradient_accumulation_steps": 4,
+    "max_grad_norm": 0.5,
+    "warmup_steps": 100,
+    "weight_decay": 0.01,
+    "max_samples_per_dataset": 500,
+    "use_fallback_data_only": false,
+    "grpo_episodes_per_batch": 8,
+    "grpo_reward_normalization": true,
+    "grpo_kl_coeff": 0.01,
+    "grpo_value_loss_coeff": 0.1,
+    "grpo_entropy_coeff": 0.08,
+    "cem_population_size": 100,
+    "cem_elite_ratio": 0.3,
+    "cem_noise_std": 0.3,
+    "cem_adaptation_steps": 50,
+    "cem_convergence_threshold": 0.005,
+    "cem_momentum": 0.3,
+    "svd_rank_ratio": 0.8,
+    "svd_min_singular_value": 1e-05,
+    "wandb_project": "enhanced-grpo-cem-gpt2",
+    "output_dir": "./enhanced_results",
+    "log_interval": 10,
+    "save_interval": 1,
+    "clip_rewards": 3.0,
+    "reward_scaling": 0.1,
+    "temperature_annealing": true,
+    "adaptive_learning_rate": true,
+    "repetition_penalty": 1.3,
+    "top_p": 0.85,
+    "temperature": 0.6
+  }
+}
