@@ -16,7 +16,7 @@ pip install requests>=2.25.0 tokenizers>=0.12.0 huggingface-hub>=0.10.0
 ## Usage
 
 ```python
-python enhanced_grpo_cem_pipeline.py
+python self_adaptive_gpt.py
 ```
 
 ## Configuration
