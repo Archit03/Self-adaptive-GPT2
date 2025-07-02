@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Fixed GPT-2 Training Pipeline without argparse
-This version resolves the indentation error on line 1512 and removes all argparse-related code.
+Fixed GPT-2 Training Pipeline with Robust Mixed Precision
+This version fixes the mixed precision warning, removes argparse, and maintains the indentation fix.
 """
 
 import subprocess
@@ -88,7 +88,6 @@ device = setup_device()
 @dataclass
 class BaseConfig:
     """Base configuration with common parameters"""
-    # Model configuration
     model_name: str = "gpt2"
     batch_size: int = 8
     learning_rate: float = 5e-5
@@ -96,55 +95,37 @@ class BaseConfig:
     max_length: int = 256
     adaptation_rank: int = 16
     num_experts: int = 4
-
-    # Mixed precision
     mixed_precision: bool = False
     gradient_accumulation_steps: int = 2
     max_grad_norm: float = 0.5
     warmup_steps: int = 100
     weight_decay: float = 0.01
-
-    # Memory settings
     enable_paged_attention: bool = False
     paged_block_size: int = 16
     max_cache_blocks: int = 1000
-
-    # Dataset configuration
     max_samples_per_dataset: int = 500
     use_fallback_data_only: bool = False
-
-    # GRPO parameters
     grpo_episodes_per_batch: int = 4
     grpo_reward_normalization: bool = True
     grpo_kl_coeff: float = 0.01
     grpo_value_loss_coeff: float = 0.1
     grpo_entropy_coeff: float = 0.05
-
-    # SVD parameters
     svd_rank_ratio: float = 0.8
     svd_min_singular_value: float = 1e-5
-
-    # Logging and saving
     wandb_project: str = "grpo-cem-gpt2"
     output_dir: str = "./results"
     log_interval: int = 10
     save_interval: int = 1
-
-    # Stability improvements
     clip_rewards: float = 2.0
     reward_scaling: float = 0.2
     temperature_annealing: bool = True
     adaptive_learning_rate: bool = True
     learning_rate_min: float = 1e-6
-
-    # Generation parameters
     repetition_penalty: float = 1.2
     top_p: float = 0.85
     temperature: float = 0.7
     min_episode_length: int = 16
     max_episode_length: int = 48
-
-    # DataLoader parameters
     num_workers: int = 4
     pin_memory: bool = True
     persistent_workers: bool = True
@@ -153,7 +134,6 @@ class BaseConfig:
 @dataclass
 class OptimizedConfig(BaseConfig):
     """Optimized configuration for standard GPUs"""
-    # Override base settings
     mixed_precision: bool = False
     cem_params: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "qa": {
@@ -185,61 +165,48 @@ class OptimizedConfig(BaseConfig):
             "convergence_threshold": 0.01
         }
     })
-
     first_epoch_cem_params: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "qa": {"population_size": 4, "elite_ratio": 0.5, "noise_std": 0.3, "adaptation_steps": 2, "convergence_threshold": 0.1},
         "sentiment": {"population_size": 4, "elite_ratio": 0.5, "noise_std": 0.3, "adaptation_steps": 2, "convergence_threshold": 0.1},
         "classification": {"population_size": 4, "elite_ratio": 0.5, "noise_std": 0.3, "adaptation_steps": 2, "convergence_threshold": 0.1},
         "general": {"population_size": 4, "elite_ratio": 0.5, "noise_std": 0.3, "adaptation_steps": 2, "convergence_threshold": 0.1}
     })
-
     cem_momentum: float = 0.3
 
 @dataclass
 class UltraConfig(BaseConfig):
     """Ultra configuration for 15GB+ GPUs"""
-    # Override for aggressive settings
     batch_size: int = 16
     learning_rate: float = 8e-5
     num_epochs: int = 5
     max_length: int = 512
     adaptation_rank: int = 32
     num_experts: int = 8
-
     mixed_precision: bool = True
     gradient_accumulation_steps: int = 4
     max_grad_norm: float = 1.0
     warmup_steps: int = 200
-
     enable_paged_attention: bool = True
     paged_block_size: int = 32
     max_cache_blocks: int = 2000
-
     max_samples_per_dataset: int = 2000
-
     grpo_episodes_per_batch: int = 8
     grpo_kl_coeff: float = 0.02
     grpo_value_loss_coeff: float = 0.2
     grpo_entropy_coeff: float = 0.1
-
     svd_rank_ratio: float = 0.9
-
     wandb_project: str = "ultra-grpo-cem-gpt2-15GB"
     output_dir: str = "./ultra_results"
     log_interval: int = 5
-
     clip_rewards: float = 3.0
     reward_scaling: float = 0.5
-
     repetition_penalty: float = 1.3
     top_p: float = 0.9
     temperature: float = 0.8
     min_episode_length: int = 32
     max_episode_length: int = 96
-
     num_workers: int = min(16, os.cpu_count() or 4)
     prefetch_factor: int = 8
-
     cem_params: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "qa": {
             "population_size": 64,
@@ -270,14 +237,12 @@ class UltraConfig(BaseConfig):
             "convergence_threshold": 0.003
         }
     })
-
     first_epoch_cem_params: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "qa": {"population_size": 16, "elite_ratio": 0.3, "noise_std": 0.2, "adaptation_steps": 8, "convergence_threshold": 0.01},
         "sentiment": {"population_size": 20, "elite_ratio": 0.3, "noise_std": 0.2, "adaptation_steps": 10, "convergence_threshold": 0.01},
         "classification": {"population_size": 24, "elite_ratio": 0.3, "noise_std": 0.2, "adaptation_steps": 12, "convergence_threshold": 0.01},
         "general": {"population_size": 16, "elite_ratio": 0.3, "noise_std": 0.2, "adaptation_steps": 8, "convergence_threshold": 0.01}
     })
-
     cem_momentum: float = 0.4
 
 # ============================================================================
@@ -289,7 +254,6 @@ class PreTokenizedDataset(Dataset):
     def __init__(self, data, tokenizer, max_length, cache_path=None):
         self.cache_path = cache_path or f"./tokenized_cache_{max_length}_{len(data)}.pt"
         self.max_length = max_length
-
         if os.path.exists(self.cache_path):
             logger.info(f"Loading pre-tokenized data from {self.cache_path}")
             with timer("Loading cached tokenized data"):
@@ -300,31 +264,24 @@ class PreTokenizedDataset(Dataset):
                 self.tokenized_data = self._tokenize_all(data, tokenizer, max_length)
                 torch.save(self.tokenized_data, self.cache_path)
                 logger.info(f"Saved tokenized data to {self.cache_path}")
-
+    
     def _tokenize_all(self, data, tokenizer, max_length):
         """Tokenize all data at once for maximum efficiency"""
         tokenized = []
-
-        # Batch tokenization for speed
         batch_size = 100
         for i in tqdm(range(0, len(data), batch_size), desc="Tokenizing"):
             batch = data[i:i+batch_size]
-
             input_texts = []
             target_texts = []
             task_types = []
-
             for input_text, target_text, task_type in batch:
                 if not all([input_text, target_text, task_type]):
                     continue
                 input_texts.append(str(input_text))
                 target_texts.append(str(target_text))
                 task_types.append(str(task_type))
-
             if not input_texts:
                 continue
-
-            # Batch tokenize inputs
             inputs_batch = tokenizer(
                 input_texts,
                 return_tensors="pt",
@@ -333,8 +290,6 @@ class PreTokenizedDataset(Dataset):
                 padding="max_length",
                 add_special_tokens=True
             )
-
-            # Batch tokenize targets
             targets_batch = tokenizer(
                 target_texts,
                 return_tensors="pt",
@@ -343,8 +298,6 @@ class PreTokenizedDataset(Dataset):
                 padding="max_length",
                 add_special_tokens=True
             )
-
-            # Store individual items
             for j in range(len(input_texts)):
                 tokenized.append({
                     'input_ids': inputs_batch['input_ids'][j],
@@ -354,12 +307,11 @@ class PreTokenizedDataset(Dataset):
                     'input_text': input_texts[j][:200],
                     'target_text': target_texts[j][:100]
                 })
-
         return tokenized
-
+    
     def __len__(self):
         return len(self.tokenized_data)
-
+    
     def __getitem__(self, idx):
         return self.tokenized_data[idx]
 
@@ -371,47 +323,39 @@ class DatasetLoader:
         self.validation_datasets = {}
         self.successful_downloads = 0
         self.failed_downloads = 0
-
+        
     def load_all_datasets(self):
         """Load datasets based on configuration"""
         if self.config.use_fallback_data_only:
             logger.info("Using fallback data only")
             self._add_fallback_data()
             return self.datasets
-
-        # Determine dataset configs based on mode
         if isinstance(self.config, UltraConfig):
             dataset_configs = self._get_ultra_dataset_configs()
         else:
             dataset_configs = self._get_optimized_dataset_configs()
-
-        # Load datasets
         if isinstance(self.config, UltraConfig):
             self._load_datasets_parallel(dataset_configs)
         else:
             self._load_datasets_sequential(dataset_configs)
-
-        # Add fallback data if needed
         total_samples = sum(len(data) for data in self.datasets.values())
         if total_samples < 100:
             self._add_fallback_data()
-
         logger.info(f"Dataset Loading: {self.successful_downloads} successful, {self.failed_downloads} failed")
         logger.info(f"Total training samples: {total_samples:,}")
-
         return self.datasets
-
+    
     def _get_optimized_dataset_configs(self):
         """Get dataset configs for optimized mode"""
         return [
             {'name': 'squad', 'split': 'train[:200]', 'task_type': 'qa', 'process_fn': self._process_squad},
             {'name': 'imdb', 'split': 'train[:200]', 'task_type': 'sentiment', 'process_fn': self._process_imdb},
         ]
-
+    
     def _get_ultra_dataset_configs(self):
         """Get dataset configs for ultra mode"""
         return [
-            {'name': 'squad', 'split': 'train[:2000]', 'val_split': 'validation[:400]',
+            {'name': 'squad', 'split': 'train[:2000]', 'val_split': 'validation[:400]', 
              'task_type': 'qa', 'process_fn': self._process_squad},
             {'name': 'imdb', 'split': 'train[:2000]', 'val_split': 'test[:400]',
              'task_type': 'sentiment', 'process_fn': self._process_imdb},
@@ -422,28 +366,26 @@ class DatasetLoader:
             {'name': 'cnn_dailymail', 'subset': '3.0.0', 'split': 'train[:800]', 'val_split': 'validation[:150]',
              'task_type': 'summarization', 'process_fn': self._process_cnn},
         ]
-
+    
     def _load_datasets_sequential(self, dataset_configs):
         """Load datasets sequentially"""
         for config in dataset_configs:
             try:
                 dataset = load_dataset(
-                    config['name'],
+                    config['name'], 
                     split=config['split'],
                     download_mode="reuse_cache_if_exists",
                     verification_mode="no_checks"
                 )
-
                 processed_data = config['process_fn'](dataset)
                 if processed_data:
                     self.datasets[config['task_type']] = processed_data
                     self.successful_downloads += 1
                     logger.info(f"Loaded {config['name']}: {len(processed_data)} samples")
-
             except Exception as e:
                 logger.warning(f"Failed to load {config['name']}: {e}")
                 self.failed_downloads += 1
-
+    
     def _load_datasets_parallel(self, dataset_configs):
         """Load datasets in parallel"""
         def load_single_dataset(config_item):
@@ -465,22 +407,16 @@ class DatasetLoader:
                         verification_mode="no_checks",
                         trust_remote_code=True
                     )
-
                 processed_data = config_item['process_fn'](dataset)
                 return config_item['task_type'], processed_data, True
-
             except Exception as e:
                 logger.error(f"Failed to load {config_item['name']}: {str(e)}")
                 return config_item['task_type'], [], False
-
-        # Load datasets in parallel
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(load_single_dataset, config) for config in dataset_configs]
-
             for future in concurrent.futures.as_completed(futures):
                 try:
                     task_type, processed_data, success = future.result(timeout=300)
-
                     if success and processed_data:
                         self.datasets.setdefault(task_type, [])
                         self.datasets[task_type].extend(processed_data[:self.config.max_samples_per_dataset])
@@ -488,22 +424,19 @@ class DatasetLoader:
                         logger.info(f"✓ Loaded {task_type}: {len(processed_data)} samples")
                     else:
                         self.failed_downloads += 1
-
                 except Exception as e:
                     logger.error(f"Future result failed: {e}")
                     self.failed_downloads += 1
-
+    
     def _process_squad(self, dataset):
         """Process SQuAD dataset"""
         processed = []
         max_context_length = 800 if isinstance(self.config, UltraConfig) else 300
-
         for item in dataset:
             try:
                 context = item.get('context', '').strip()
                 question = item.get('question', '').strip()
                 answers = item.get('answers', {})
-
                 if context and question and answers and answers.get('text'):
                     answer = answers['text'][0].strip()
                     context = context[:max_context_length]
@@ -511,17 +444,15 @@ class DatasetLoader:
             except:
                 continue
         return processed
-
+    
     def _process_imdb(self, dataset):
         """Process IMDB dataset"""
         processed = []
         max_text_length = 1000 if isinstance(self.config, UltraConfig) else 300
-
         for item in dataset:
             try:
                 text = item.get('text', '').strip()
                 label = item.get('label', 0)
-
                 if text and len(text) > 50:
                     text = text[:max_text_length]
                     target = 'positive' if label == 1 else 'negative'
@@ -529,18 +460,16 @@ class DatasetLoader:
             except:
                 continue
         return processed
-
+    
     def _process_ag_news(self, dataset):
         """Process AG News dataset"""
         processed = []
         label_map = {0: 'world', 1: 'sports', 2: 'business', 3: 'technology'}
         max_text_length = 800 if isinstance(self.config, UltraConfig) else 300
-
         for item in dataset:
             try:
                 text = item.get('text', '').strip()
                 label = item.get('label', 0)
-
                 if text and len(text) > 30:
                     text = text[:max_text_length]
                     target = label_map.get(label, 'general')
@@ -548,45 +477,40 @@ class DatasetLoader:
             except:
                 continue
         return processed
-
+    
     def _process_xsum(self, dataset):
         """Process XSum dataset"""
         processed = []
         max_doc_length = 1200 if isinstance(self.config, UltraConfig) else 500
-
         for item in dataset:
             try:
                 document = item.get('document', '').strip()
                 summary = item.get('summary', '').strip()
-
                 if document and summary and len(document) > 100:
                     document = document[:max_doc_length]
                     processed.append((f"Summarize this article: {document}", summary, 'summarization'))
             except:
                 continue
         return processed
-
+    
     def _process_cnn(self, dataset):
         """Process CNN/DailyMail dataset"""
         processed = []
         max_article_length = 1000 if isinstance(self.config, UltraConfig) else 500
-
         for item in dataset:
             try:
                 article = item.get('article', '').strip()
                 highlights = item.get('highlights', '').strip()
-
                 if article and highlights and len(article) > 200:
                     article = article[:max_article_length]
                     processed.append((f"Summarize this news article: {article}", highlights, 'summarization'))
             except:
                 continue
         return processed
-
+    
     def _add_fallback_data(self):
         """Add fallback data"""
         multiplier = 100 if isinstance(self.config, UltraConfig) else 20
-
         fallback = {
             'qa': [
                 ("Context: Paris is the capital of France.\nQuestion: What is the capital of France?", "Paris", "qa"),
@@ -610,7 +534,6 @@ class DatasetLoader:
                 ("Explain climate change", "Climate change refers to long-term changes in global temperatures and weather patterns.", "general"),
             ] * int(multiplier * 0.5)
         }
-
         for task_type, data in fallback.items():
             self.datasets.setdefault(task_type, [])
             self.datasets[task_type].extend(data)
@@ -620,13 +543,11 @@ class DatasetLoader:
 # ============================================================================
 
 class RobustMixedPrecisionManager:
-    """Robust mixed precision manager that handles all edge cases"""
+    """Robust mixed precision manager with fixed unscale handling"""
     def __init__(self, enabled=True):
         self.enabled = enabled and torch.cuda.is_available()
         self.scaler = None
-        self.unscaled_this_step = False
         self.step_count = 0
-
         if self.enabled:
             try:
                 self.scaler = torch.cuda.amp.GradScaler(
@@ -639,76 +560,56 @@ class RobustMixedPrecisionManager:
             except Exception as e:
                 logger.warning(f"Failed to initialize mixed precision: {e}")
                 self.enabled = False
-
         if not self.enabled:
             logger.info("Mixed precision disabled")
-
+    
     def scale_loss(self, loss):
         """Scale loss if using mixed precision"""
         if self.enabled and self.scaler is not None:
             return self.scaler.scale(loss)
         return loss
-
-    def backward_and_unscale(self, loss, optimizers):
-        """Combined backward pass and unscaling for better control"""
-        if not self.enabled or self.scaler is None:
+    
+    def backward(self, loss):
+        """Perform backward pass with proper scaling"""
+        if self.enabled and self.scaler is not None:
+            self.scaler.scale(loss).backward()
+        else:
             loss.backward()
-            return True
-
-        try:
-            # Scale and backward
-            scaled_loss = self.scaler.scale(loss)
-            scaled_loss.backward()
-
-            # Unscale gradients for all optimizers
-            if not self.unscaled_this_step:
+    
+    def unscale_gradients(self, optimizers):
+        """Unscale gradients for all optimizers"""
+        if self.enabled and self.scaler is not None:
+            try:
                 for optimizer in optimizers:
                     self.scaler.unscale_(optimizer)
-                self.unscaled_this_step = True
-
-            return True
-
-        except Exception as e:
-            logger.warning(f"Mixed precision backward failed: {e}")
-            # Fallback to regular backward
-            self.enabled = False
-            self.scaler = None
-            loss.backward()
-            return False
-
+                return True
+            except Exception as e:
+                logger.warning(f"Gradient unscaling failed: {e}")
+                self.enabled = False
+                self.scaler = None
+                return False
+        return True
+    
     def step_optimizers(self, optimizers):
         """Step all optimizers with proper scaling"""
-        if not self.enabled or self.scaler is None:
-            for optimizer in optimizers:
-                optimizer.step()
-            self.reset_state()
-            return True
-
-        try:
-            # Step all optimizers
-            for optimizer in optimizers:
-                self.scaler.step(optimizer)
-
-            # Update scaler
-            self.scaler.update()
-            self.reset_state()
-            self.step_count += 1
-            return True
-
-        except Exception as e:
-            logger.warning(f"Mixed precision step failed: {e}")
-            # Fallback to regular stepping
-            self.enabled = False
-            self.scaler = None
-            for optimizer in optimizers:
-                optimizer.step()
-            self.reset_state()
-            return False
-
-    def reset_state(self):
-        """Reset internal state for next accumulation cycle"""
-        self.unscaled_this_step = False
-
+        if self.enabled and self.scaler is not None:
+            try:
+                for optimizer in optimizers:
+                    self.scaler.step(optimizer)
+                self.scaler.update()
+                self.step_count += 1
+                return True
+            except Exception as e:
+                logger.warning(f"Mixed precision step failed: {e}")
+                self.enabled = False
+                self.scaler = None
+                for optimizer in optimizers:
+                    optimizer.step()
+                return False
+        for optimizer in optimizers:
+            optimizer.step()
+        return True
+    
     def get_scale(self):
         """Get current scale for debugging"""
         if self.enabled and self.scaler is not None:
@@ -730,8 +631,6 @@ class SimplifiedPagedKVCache:
         self.block_size = block_size
         self.max_blocks = max_blocks
         self.num_layers = 12
-
-        # Simplified allocation - smaller cache for speed
         try:
             self.key_blocks = torch.zeros(
                 (self.num_layers, max_blocks, block_size, num_heads, self.head_dim),
@@ -760,36 +659,32 @@ class SimplifiedPagedKVCache:
                 device=device,
                 requires_grad=False
             )
-
         self.free_blocks = set(range(self.max_blocks))
         self.allocated_blocks = {}
         self.sequence_lengths = {}
-
+    
     def allocate_sequence(self, sequence_id: str, initial_length: int = 0) -> bool:
         """Simplified allocation"""
         if sequence_id in self.allocated_blocks:
             return True
-
         blocks_needed = max(1, math.ceil(initial_length / self.block_size))
         if len(self.free_blocks) < blocks_needed:
             return False
-
         allocated = []
         for _ in range(blocks_needed):
             if self.free_blocks:
                 allocated.append(self.free_blocks.pop())
-
         self.allocated_blocks[sequence_id] = allocated
         self.sequence_lengths[sequence_id] = initial_length
         return True
-
+    
     def deallocate_sequence(self, sequence_id: str):
         """Simplified deallocation"""
         if sequence_id in self.allocated_blocks:
             self.free_blocks.update(self.allocated_blocks[sequence_id])
             del self.allocated_blocks[sequence_id]
             del self.sequence_lengths[sequence_id]
-
+    
     def get_memory_stats(self) -> Dict[str, Any]:
         """Get memory stats"""
         total_blocks = self.max_blocks
@@ -811,7 +706,6 @@ class SVDDecomposer:
             weight = weight.to(device).float()
             U, S, Vh = torch.linalg.svd(weight, full_matrices=False)
             V = Vh.T
-
             valid_sv = S > min_sv
             if rank_ratio < 1.0:
                 n_keep = max(1, int(len(S) * rank_ratio))
@@ -819,12 +713,11 @@ class SVDDecomposer:
                 keep_mask = torch.zeros_like(S, dtype=torch.bool, device=device)
                 keep_mask[keep_indices] = True
                 valid_sv = valid_sv & keep_mask
-
             return U[:, valid_sv], S[valid_sv], V[:, valid_sv]
         except Exception as e:
             logger.error(f"SVD decomposition failed: {str(e)}")
             return None, None, None
-
+    
     @staticmethod
     def reconstruct_weight(U: torch.Tensor, S: torch.Tensor, V: torch.Tensor,
                          adaptation_vector: torch.Tensor = None, target_dtype: torch.dtype = None):
@@ -833,21 +726,15 @@ class SVDDecomposer:
             return None
         try:
             U, S, V = U.float(), S.float(), V.float()
-
             if adaptation_vector is not None:
                 adaptation_vector = adaptation_vector.float()
-                # Simplified adaptation for speed
                 adaptation_factor = torch.tanh(adaptation_vector[:len(S)]) * 0.05 + 1.0
                 adapted_S = S * adaptation_factor
             else:
                 adapted_S = S
-
-            # Use einsum for faster matrix multiplication
             reconstructed = torch.einsum('ij,j,kj->ik', U, adapted_S, V)
-
             if target_dtype is not None:
                 reconstructed = reconstructed.to(target_dtype)
-
             return reconstructed
         except Exception as e:
             logger.error(f"Weight reconstruction failed: {str(e)}")
@@ -863,18 +750,15 @@ class ValueNetwork(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(hidden_size // 4, 1)
         ).to(device)
-
-        # Initialize weights
         for module in self.value_head:
             if isinstance(module, nn.Linear):
                 nn.init.xavier_normal_(module.weight.data)
                 nn.init.zeros_(module.bias.data)
-
+    
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Forward pass"""
         try:
             hidden_states = hidden_states.to(device).float()
-            # Simple mean pooling for speed
             pooled = torch.mean(hidden_states, dim=1)
             values = self.value_head(pooled).squeeze(-1)
             return values
@@ -892,106 +776,82 @@ class RewardFunction:
             'classification': 1.8,
             'general': 1.5
         }
-
+    
     def compute_reward(self, generated_text: str, target_text: str, task_type: str) -> float:
         """Fast reward computation"""
         try:
             if not generated_text or not target_text:
                 return -1.0
-
-            # Simple, fast reward functions
             reward = {
                 "qa": self._fast_qa_reward,
                 "sentiment": self._fast_sentiment_reward,
                 "classification": self._fast_classification_reward,
                 "summarization": self._fast_summarization_reward
             }.get(task_type, self._fast_general_reward)(generated_text, target_text)
-
             scaled_reward = reward * self.task_scales.get(task_type, 1.0)
             return np.clip(scaled_reward, -2.0, 2.0)
         except Exception as e:
             logger.error(f"Reward computation failed: {str(e)}")
             return -1.0
-
+    
     def _fast_qa_reward(self, generated: str, target: str) -> float:
         """Fast QA reward based on word overlap"""
         gen_words = set(generated.lower().split())
         target_words = set(target.lower().split())
-
         if not target_words:
             return 0.0
-
         overlap = len(gen_words & target_words) / len(target_words)
-
-        # Bonus for exact match
         if target.lower() in generated.lower():
             overlap += 0.5
-
         return min(overlap, 1.0)
-
+    
     def _fast_sentiment_reward(self, generated: str, target: str) -> float:
         """Fast sentiment reward"""
         positive_words = {'good', 'great', 'positive', 'happy', 'love', 'excellent'}
         negative_words = {'bad', 'terrible', 'negative', 'sad', 'hate', 'awful'}
-
         gen_words = set(generated.lower().split())
         target_lower = target.lower()
-
         gen_positive = len(gen_words & positive_words)
         gen_negative = len(gen_words & negative_words)
-
         target_is_positive = 'positive' in target_lower or '1' in target_lower
-
         if target_is_positive and gen_positive > gen_negative:
             return 1.0
         elif not target_is_positive and gen_negative > gen_positive:
             return 1.0
         else:
             return 0.2
-
+    
     def _fast_classification_reward(self, generated: str, target: str) -> float:
         """Fast classification reward"""
         if target.lower() in generated.lower():
             return 1.0
-
-        # Simple word overlap
         gen_words = set(generated.lower().split())
         target_words = set(target.lower().split())
-
         if target_words:
             overlap = len(gen_words & target_words) / len(target_words)
             return overlap * 0.8
-
         return 0.1
-
+    
     def _fast_summarization_reward(self, generated: str, target: str) -> float:
         """Fast summarization reward"""
         gen_len = len(generated.split())
         target_len = len(target.split())
-
         if gen_len == 0:
             return -1.0
-
-        # Length ratio bonus
         length_ratio = min(gen_len / max(target_len, 1), max(target_len, 1) / gen_len)
         length_score = 0.5 if 0.5 <= length_ratio <= 2.0 else 0.2
-
-        # Word overlap
         gen_words = set(generated.lower().split())
         target_words = set(target.lower().split())
         overlap = len(gen_words & target_words) / max(len(target_words), 1) if target_words else 0
-
         return length_score + overlap * 0.5
-
+    
     def _fast_general_reward(self, generated: str, target: str) -> float:
         """Fast general reward"""
         if len(generated.strip()) < 5:
             return -0.5
-
         words = generated.split()
         diversity = len(set(words)) / max(len(words), 1)
         length_score = min(len(words) / 20, 1.0)
-
         return diversity * 0.5 + length_score * 0.5
 
 class CEMOptimizer:
@@ -1001,14 +861,14 @@ class CEMOptimizer:
         self.task_params = config.cem_params
         self.first_epoch_params = config.first_epoch_cem_params
         self.momentum = config.cem_momentum
-
+    
     def get_task_params(self, task_type: str, epoch: int = 0) -> Dict[str, Any]:
         """Get task-specific CEM parameters based on epoch"""
-        if epoch == 0:  # First epoch - use simple params
+        if epoch == 0:
             return self.first_epoch_params.get(task_type, self.first_epoch_params["general"])
-        else:  # Later epochs - use full params
+        else:
             return self.task_params.get(task_type, self.task_params["general"])
-
+    
     def optimize_adaptation(self, model, input_batch, target_batch, adaptation_dim: int,
                           task_type: str = "general", max_steps: int = None, epoch: int = 0):
         """Optimized adaptation with progressive complexity"""
@@ -1019,95 +879,68 @@ class CEMOptimizer:
         noise_std = params["noise_std"]
         max_steps = params["adaptation_steps"] if max_steps is None else max_steps
         convergence_threshold = params["convergence_threshold"]
-
         population_mean = torch.zeros(adaptation_dim, device=device)
         population_std = torch.ones(adaptation_dim, device=device) * noise_std
         best_params, best_score = None, float('-inf')
-
-        # Skip expensive CEM for first epoch
         if epoch == 0:
             logger.debug(f"Fast CEM for {task_type} (epoch 0)")
-            max_steps = min(max_steps, 3)  # Very few steps for first epoch
-
+            max_steps = min(max_steps, 3)
         for step in range(max_steps):
             try:
-                # Generate smaller population for speed
                 population = torch.randn(population_size, adaptation_dim, device=device)
                 population = population * population_std + population_mean
-                population = torch.clamp(population, -1.0, 1.0)  # Smaller bounds for stability
-
-                # Fast evaluation
+                population = torch.clamp(population, -1.0, 1.0)
                 scores = self._fast_evaluate_adaptation_params(
                     model, input_batch, target_batch, population, task_type
                 )
-
                 valid_mask = torch.isfinite(scores)
                 if not valid_mask.any():
                     logger.warning(f"All CEM scores invalid at step {step}")
                     break
-
                 valid_scores = scores[valid_mask]
                 valid_population = population[valid_mask]
-
                 if len(valid_scores) > 0:
                     current_best_idx = torch.argmax(valid_scores)
                     current_best_score = valid_scores[current_best_idx].item()
-
                     if current_best_score > best_score:
                         best_score = current_best_score
                         best_params = valid_population[current_best_idx].clone()
-
-                # Quick update for first epoch
                 if epoch == 0 and step >= 1:
                     break
-
-                # Update distribution
                 n_elite_actual = min(n_elite, len(valid_scores))
                 if n_elite_actual > 0:
                     elite_indices = torch.topk(valid_scores, n_elite_actual)[1]
                     elite_samples = valid_population[elite_indices]
-
                     new_mean = elite_samples.mean(dim=0)
                     new_std = elite_samples.std(dim=0) + 1e-6
-
                     population_mean = self.momentum * population_mean + (1 - self.momentum) * new_mean
                     population_std = self.momentum * population_std + (1 - self.momentum) * new_std
                     population_std = torch.clamp(population_std, 0.01, 0.5)
-
                     mean_change = torch.norm(new_mean - population_mean).item()
                     if mean_change < convergence_threshold:
                         logger.debug(f"CEM converged at step {step}")
                         break
-
             except Exception as e:
                 logger.error(f"CEM step {step} failed: {str(e)}")
                 break
-
         return best_params, best_score, []
-
+    
     def _fast_evaluate_adaptation_params(self, model, input_batch, target_batch, population, task_type):
         """Fast evaluation of adaptation parameters"""
         scores = torch.full((len(population),), float('-inf'), device=device)
-
         if not isinstance(input_batch, dict):
             return scores
-
         with torch.no_grad():
             for i, params in enumerate(population):
                 try:
                     model.apply_adaptation_params(params)
-
-                    # Quick forward pass
                     outputs = model.forward_with_adaptation(
                         input_batch["input_ids"],
                         attention_mask=input_batch["attention_mask"]
                     )
-
                     if outputs is None:
                         scores[i] = -10.0
                         continue
-
-                    # Simple loss computation
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
                     shift_labels = input_batch["input_ids"][..., 1:].contiguous()
                     loss = F.cross_entropy(
@@ -1116,13 +949,10 @@ class CEMOptimizer:
                         ignore_index=-100,
                         reduction='mean'
                     )
-
                     score = -loss.item()
                     scores[i] = score if torch.isfinite(torch.tensor(score)) else -10.0
-
                 except Exception as e:
                     scores[i] = -10.0
-
         return scores
 
 # ============================================================================
@@ -1154,14 +984,8 @@ class SelfAdaptiveGPT2(nn.Module):
         super().__init__()
         self.config = config
         logger.info(f"Loading {config.model_name}")
-
-        # Load pretrained GPT-2
         self.base_model = GPT2LMHeadModel.from_pretrained(config.model_name)
-
-        # Gradient checkpointing - disable for first epoch
         self.gradient_checkpointing_enabled = False
-
-        # Simplified KV cache
         self.kv_cache = (
             SimplifiedPagedKVCache(
                 max_seq_len=config.max_length * 2,
@@ -1172,11 +996,7 @@ class SelfAdaptiveGPT2(nn.Module):
             )
             if config.enable_paged_attention else None
         )
-
-        # Move to device
         self.base_model = self.base_model.to(device)
-
-        # Components
         self.svd_components = {}
         self.adaptation_params = nn.ParameterDict()
         self.value_network = ValueNetwork(self.base_model.config.hidden_size).to(device)
@@ -1184,19 +1004,16 @@ class SelfAdaptiveGPT2(nn.Module):
             nn.Linear(self.base_model.config.hidden_size, config.num_experts),
             nn.Softmax(dim=-1)
         ).to(device)
-
         self.cem_optimizer = CEMOptimizer(config)
         self._initialize_svd_decomposition()
-
         self.current_adaptation = None
         self.sequence_counter = 0
         self.current_temperature = config.temperature
-
         logger.info(f"Model initialized with {self._count_parameters():,} parameters")
-
+    
     def _count_parameters(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
-
+    
     def enable_gradient_checkpointing(self, enable: bool = True):
         """Control gradient checkpointing"""
         if enable and not self.gradient_checkpointing_enabled:
@@ -1207,30 +1024,24 @@ class SelfAdaptiveGPT2(nn.Module):
             self.base_model.gradient_checkpointing_disable()
             self.gradient_checkpointing_enabled = False
             logger.info("Gradient checkpointing disabled")
-
+    
     def _initialize_svd_decomposition(self):
         """Initialize SVD decomposition"""
         logger.info("Initializing SVD decomposition")
-
-        # Choose layers based on config
         if isinstance(self.config, UltraConfig):
-            # Decompose more layers for ultra mode
             target_layers = [
                 f'transformer.h.{i}.attn.c_attn' for i in range(12)
             ] + [
                 f'transformer.h.{i}.mlp.c_fc' for i in range(6)
             ]
         else:
-            # Only decompose first 3 layers for standard mode
             target_layers = [
                 'transformer.h.0.attn.c_attn',
                 'transformer.h.1.attn.c_attn',
                 'transformer.h.2.attn.c_attn'
             ]
-
         decomposed_count = 0
         total_adaptation_dim = 0
-
         for name, module in self.base_model.named_modules():
             if name in target_layers and hasattr(module, 'weight'):
                 try:
@@ -1240,7 +1051,6 @@ class SelfAdaptiveGPT2(nn.Module):
                         rank_ratio=self.config.svd_rank_ratio,
                         min_sv=self.config.svd_min_singular_value
                     )
-
                     if U is not None and S is not None and V is not None:
                         self.svd_components[name] = {
                             'U': U.detach(),
@@ -1249,7 +1059,6 @@ class SelfAdaptiveGPT2(nn.Module):
                             'original_dtype': weight.dtype,
                             'original_shape': weight.shape
                         }
-
                         param_name = name.replace('.', '_')
                         self.adaptation_params[param_name] = nn.Parameter(
                             torch.zeros(len(S), device=device, dtype=torch.float32)
@@ -1257,21 +1066,18 @@ class SelfAdaptiveGPT2(nn.Module):
                         total_adaptation_dim += len(S)
                         decomposed_count += 1
                         logger.info(f"SVD decomposed {name}: {weight.shape} -> rank {len(S)}")
-
                 except Exception as e:
                     logger.error(f"SVD decomposition error for {name}: {str(e)}")
-
         logger.info(f"SVD complete: {decomposed_count} layers, {total_adaptation_dim} total params")
-
+    
     def get_total_adaptation_dim(self) -> int:
         """Get total dimension of adaptation parameters"""
         return sum(param.numel() for param in self.adaptation_params.values())
-
+    
     def apply_adaptation_params(self, adaptation_vector: torch.Tensor):
         """Apply adaptation parameters to the model"""
         if not self.svd_components or adaptation_vector is None:
             return
-
         try:
             offset = 0
             for name, comps in self.svd_components.items():
@@ -1285,12 +1091,11 @@ class SelfAdaptiveGPT2(nn.Module):
                         offset += param_size
         except Exception as e:
             logger.error(f"Error applying adaptation params: {str(e)}")
-
+    
     def forward_with_adaptation(self, input_ids, attention_mask=None, use_adaptation=True, sequence_id=None):
         """Forward pass with adaptation"""
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device) if attention_mask is not None else None
-
         if not use_adaptation or not self.svd_components:
             return self.base_model(
                 input_ids=input_ids,
@@ -1298,8 +1103,6 @@ class SelfAdaptiveGPT2(nn.Module):
                 output_hidden_states=True,
                 return_dict=True
             )
-
-        # Apply adaptation
         original_weights = {}
         try:
             for name, comps in self.svd_components.items():
@@ -1313,7 +1116,6 @@ class SelfAdaptiveGPT2(nn.Module):
                 )
                 if adapted is not None:
                     module.weight.data.copy_(adapted)
-
             outputs = self.base_model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -1321,19 +1123,16 @@ class SelfAdaptiveGPT2(nn.Module):
                 return_dict=True
             )
             return outputs
-
         finally:
             for name, orig in original_weights.items():
                 dict(self.base_model.named_modules())[name].weight.data.copy_(orig)
-
+    
     def generate_episode(self, input_ids, attention_mask, max_new_tokens=None, task_type="general", epoch=0):
         """Generate an episode for GRPO training"""
         self.eval()
         input_ids = input_ids.to(device)
         attention_mask = attention_mask.to(device)
-
         if max_new_tokens is None:
-            # Longer episodes for ultra mode
             if isinstance(self.config, UltraConfig):
                 if epoch == 0:
                     max_new_tokens = random.randint(16, 48)
@@ -1341,20 +1140,16 @@ class SelfAdaptiveGPT2(nn.Module):
                     max_new_tokens = random.randint(32, 96)
             else:
                 max_new_tokens = random.randint(8, 24)
-
         seq_id = f"seq_{self.sequence_counter}_{task_type}"
         self.sequence_counter += 1
-
         try:
             with torch.no_grad():
-                # Adaptation
                 input_batch = {
                     "input_ids": input_ids,
                     "attention_mask": attention_mask
                 }
-
                 try:
-                    if epoch > 0:  # Skip adaptation for first epoch
+                    if epoch > 0:
                         self.adapt_for_inference(input_batch, task_type=task_type, epoch=epoch)
                         use_adaptation = True
                     else:
@@ -1362,21 +1157,16 @@ class SelfAdaptiveGPT2(nn.Module):
                 except Exception as e:
                     logger.debug(f"Adaptation skipped: {e}")
                     use_adaptation = False
-
-                # Get values
                 try:
                     if use_adaptation:
                         init_out = self.forward_with_adaptation(input_ids, attention_mask, use_adaptation=True)
                     else:
                         init_out = self.base_model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True, return_dict=True)
-
                     hidden_states = init_out.hidden_states[-1]
                     values = self.value_network(hidden_states)
                 except Exception as e:
                     logger.warning(f"Forward failed, using dummy values: {e}")
                     values = torch.zeros(input_ids.size(0), device=device)
-
-                # Generate
                 gen = self.base_model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -1392,19 +1182,14 @@ class SelfAdaptiveGPT2(nn.Module):
                     output_scores=True,
                     use_cache=True
                 )
-
                 seq = gen.sequences[:, input_ids.size(1):]
                 length = seq.size(1)
-
-                # Compute log probabilities
                 log_probs = []
                 for i, score in enumerate(gen.scores[:length]):
                     lp = F.log_softmax(score, dim=-1).gather(1, seq[:, i:i+1]).squeeze(-1)
                     log_probs.append(lp)
                 log_probs = torch.stack(log_probs, dim=1) if log_probs else torch.zeros_like(seq, dtype=torch.float32)
-
                 rewards = torch.zeros_like(seq, dtype=torch.float32)
-
                 return Episode(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -1416,10 +1201,8 @@ class SelfAdaptiveGPT2(nn.Module):
                     sequence_id=seq_id,
                     episode_length=length
                 )
-
         except Exception as e:
             logger.error(f"Episode generation failed: {str(e)}")
-            # Return minimal episode
             dummy_seq = torch.zeros((1, 1), dtype=torch.long, device=device)
             dummy_values = torch.zeros(1, device=device)
             return Episode(
@@ -1433,46 +1216,36 @@ class SelfAdaptiveGPT2(nn.Module):
                 sequence_id=seq_id,
                 episode_length=1
             )
-
+    
     def compute_grpo_loss(self, episodes: List[Episode]):
         """Compute GRPO loss"""
         if not episodes:
             return torch.tensor(0.0, requires_grad=True, device=device)
-
-        # Group episodes by task for better normalization (ultra mode only)
         if isinstance(self.config, UltraConfig):
             grouped_episodes = defaultdict(list)
             for episode in episodes:
                 grouped_episodes[episode.task_type].append(episode)
-
             total_loss = torch.tensor(0.0, requires_grad=True, device=device)
             total_episodes = 0
-
             for task_type, task_episodes in grouped_episodes.items():
                 task_loss = self._compute_task_loss(task_episodes, task_type)
                 if task_loss is not None:
                     total_loss = total_loss + task_loss
                     total_episodes += len(task_episodes)
-
             return total_loss / max(len(grouped_episodes), 1) if total_episodes > 0 else torch.tensor(0.0, requires_grad=True, device=device)
         else:
-            # Standard mode - simpler computation
             return self._compute_task_loss(episodes, "general")
-
+    
     def _compute_task_loss(self, episodes: List[Episode], task_type: str):
         """Compute loss for a specific task"""
         if not episodes:
             return None
-
         total_loss = torch.tensor(0.0, requires_grad=True, device=device)
         valid_episodes = 0
-
-        # Collect all rewards for normalization (ultra mode)
         if isinstance(self.config, UltraConfig):
             all_rewards = torch.cat([
                 ep.rewards.flatten() for ep in episodes if ep.rewards.numel() > 0
             ])
-
             if all_rewards.numel() > 1:
                 reward_mean = all_rewards.mean()
                 reward_std = torch.clamp(all_rewards.std() + 1e-6, min=0.1, max=5.0)
@@ -1480,24 +1253,17 @@ class SelfAdaptiveGPT2(nn.Module):
                 reward_mean, reward_std = 0.0, 1.0
         else:
             reward_mean, reward_std = 0.0, 1.0
-
         for episode in episodes:
             try:
                 if episode.rewards.numel() == 0 or episode.log_probs.numel() == 0:
                     continue
-
-                # Normalize rewards
                 if isinstance(self.config, UltraConfig):
                     normalized_rewards = (episode.rewards - reward_mean) / reward_std
                 else:
                     normalized_rewards = episode.rewards
-
                 normalized_rewards = torch.clamp(normalized_rewards, -self.config.clip_rewards, self.config.clip_rewards)
                 normalized_rewards = normalized_rewards * self.config.reward_scaling
-
-                # Compute advantages
                 if episode.values.numel() > 0:
-                    # Match dimensions
                     if normalized_rewards.dim() > episode.values.dim():
                         values_expanded = episode.values.mean().expand_as(normalized_rewards)
                     elif normalized_rewards.dim() == episode.values.dim():
@@ -1506,89 +1272,66 @@ class SelfAdaptiveGPT2(nn.Module):
                         values_expanded = episode.values.flatten()[:min_len]
                     else:
                         values_expanded = episode.values[:normalized_rewards.numel()]
-
                     advantages = normalized_rewards - values_expanded.detach()
-
-                    # Advantage normalization (ultra mode)
                     if isinstance(self.config, UltraConfig) and advantages.numel() > 1:
                         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-6)
                 else:
                     advantages = normalized_rewards
-
-                # Loss computation
                 policy_loss = -(episode.log_probs.flatten()[:advantages.numel()] * advantages).mean()
-
                 if episode.values.numel() > 0:
                     value_loss = F.mse_loss(values_expanded, normalized_rewards.detach())
                 else:
                     value_loss = torch.tensor(0.0, device=device)
-
-                # Entropy bonus (ultra mode)
                 if isinstance(self.config, UltraConfig):
                     entropy_loss = -episode.log_probs.mean()
                 else:
                     entropy_loss = torch.tensor(0.0, device=device)
-
-                # Combined loss with task-specific weighting (ultra mode)
-                if isinstance(self.config, UltraConfig):
-                    task_weight = {
-                        'qa': 1.2,
-                        'sentiment': 1.0,
-                        'classification': 1.1,
-                        'summarization': 1.3,
-                        'general': 1.0
-                    }.get(task_type, 1.0)
-                else:
-                    task_weight = 1.0
-
+                task_weight = {
+                    'qa': 1.2,
+                    'sentiment': 1.0,
+                    'classification': 1.1,
+                    'summarization': 1.3,
+                    'general': 1.0
+                }.get(task_type, 1.0)
                 episode_loss = task_weight * (
-                    policy_loss +
+                    policy_loss + 
                     self.config.grpo_value_loss_coeff * value_loss +
                     self.config.grpo_entropy_coeff * entropy_loss
                 )
-
                 if torch.isfinite(episode_loss):
                     total_loss = total_loss + episode_loss
                     valid_episodes += 1
-
             except Exception as e:
                 logger.error(f"Episode loss computation failed: {str(e)}")
-
         return total_loss / max(valid_episodes, 1) if valid_episodes > 0 else None
-
+    
     def adapt_for_inference(self, input_batch, target_batch=None, task_type="general", epoch=0):
         """Adapt model for inference"""
         adaptation_dim = self.get_total_adaptation_dim()
         if adaptation_dim == 0:
             return 0.0, []
-
         try:
             best_params, best_score, history = self.cem_optimizer.optimize_adaptation(
                 self, input_batch, target_batch, adaptation_dim, task_type, epoch=epoch
             )
-
             if best_params is not None:
                 self.apply_adaptation_params(best_params)
                 self.current_adaptation = best_params.clone()
-
             return best_score, history
         except Exception as e:
             logger.error(f"Adaptation failed: {str(e)}")
             return -10.0, []
-
+    
     def get_memory_stats(self) -> Dict[str, Any]:
         """Get memory statistics"""
         stats = {
             "gpu_memory_allocated": torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
             "gpu_memory_reserved": torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0,
         }
-
         if isinstance(self.config, UltraConfig):
             stats["gpu_memory_utilization"] = torch.cuda.memory_allocated() / (15 * 1e9) * 100
-
         if self.kv_cache:
             stats.update(self.kv_cache.get_memory_stats())
-
         return stats
 
 # ============================================================================
@@ -1596,24 +1339,17 @@ class SelfAdaptiveGPT2(nn.Module):
 # ============================================================================
 
 class GRPOTrainer:
-    """Base GRPO trainer"""
+    """GRPO trainer with fixed mixed precision handling"""
     def __init__(self, config):
         self.config = config
         self.tokenizer = GPT2Tokenizer.from_pretrained(config.model_name)
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
-
         logger.info(f"Initializing model with config: {type(config).__name__}")
         self.model = SelfAdaptiveGPT2(config)
-
-        # Mixed precision manager
         self.amp_manager = RobustMixedPrecisionManager(config.mixed_precision)
-
-        # Optimizers
         adaptation_params = list(self.model.adaptation_params.values())
         other_params = list(self.model.task_classifier.parameters())
-
-        # Try fused optimizer for ultra mode
         if isinstance(config, UltraConfig):
             try:
                 self.policy_optimizer = torch.optim.AdamW(
@@ -1624,7 +1360,7 @@ class GRPOTrainer:
                     eps=1e-8,
                     fused=True
                 )
-                self.value_optimizer = None  # Combined with policy optimizer
+                self.value_optimizer = None
             except:
                 self.policy_optimizer = torch.optim.AdamW(
                     adaptation_params + other_params,
@@ -1655,8 +1391,6 @@ class GRPOTrainer:
                 betas=(0.9, 0.999),
                 eps=1e-8
             )
-
-        # Learning rate schedulers
         total_steps = config.num_epochs * 100
         self.policy_scheduler = get_cosine_schedule_with_warmup(
             self.policy_optimizer,
@@ -1671,18 +1405,10 @@ class GRPOTrainer:
             )
         else:
             self.value_scheduler = None
-
-        # Load datasets
         self.dataset_loader = DatasetLoader(config)
         self.datasets = self.dataset_loader.load_all_datasets()
-
-        # Reward function
         self.reward_function = RewardFunction()
-
-        # Create output directory
         os.makedirs(config.output_dir, exist_ok=True)
-
-        # Training metrics
         self.training_metrics = {
             "policy_loss": [],
             "gpu_memory_usage": [],
@@ -1690,7 +1416,6 @@ class GRPOTrainer:
             "training_speed": [],
             "episode_lengths": []
         }
-
         if isinstance(config, UltraConfig):
             self.training_metrics.update({
                 "value_loss": [],
@@ -1700,13 +1425,11 @@ class GRPOTrainer:
                 "learning_rates": [],
                 "gradient_norms": []
             })
-
         logger.info("Trainer initialized successfully")
-
+    
     def create_dataloader(self, data, batch_size, is_validation=False):
         """Create DataLoader"""
         dataset = PreTokenizedDataset(data, self.tokenizer, self.config.max_length)
-
         return DataLoader(
             dataset,
             batch_size=batch_size,
@@ -1718,7 +1441,7 @@ class GRPOTrainer:
             prefetch_factor=self.config.prefetch_factor,
             collate_fn=self._collate_fn
         )
-
+    
     def _collate_fn(self, batch):
         """Collate function"""
         try:
@@ -1733,12 +1456,10 @@ class GRPOTrainer:
         except Exception as e:
             logger.error(f"Collate failed: {e}")
             return None
-
+    
     def train_grpo(self):
-        """Main training loop"""
+        """Main training loop with fixed mixed precision"""
         logger.info(f"Starting GRPO training with {type(self.config).__name__}")
-
-        # Initialize wandb
         if self.config.wandb_project:
             try:
                 wandb.init(
@@ -1748,36 +1469,26 @@ class GRPOTrainer:
                 )
             except Exception as e:
                 logger.warning(f"Wandb initialization failed: {str(e)}")
-
-        # Prepare data
         all_data = [item for task_data in self.datasets.values() for item in task_data]
         if not all_data:
             logger.error("No training data available")
             return
-
         logger.info(f"Total training samples: {len(all_data):,}")
-
-        # Create dataloader
         dataloader = self.create_dataloader(all_data, self.config.batch_size)
         if dataloader is None:
             logger.error("Failed to create training dataloader")
             return
-
         self.model.train()
         global_step = 0
         start_time = time.time()
-
         for epoch in range(self.config.num_epochs):
             logger.info(f"Epoch {epoch + 1}/{self.config.num_epochs}")
-
-            # Progressive complexity
             if epoch == 0:
                 logger.info("First epoch: Speed optimizations enabled")
                 self.model.enable_gradient_checkpointing(False)
             else:
                 logger.info("Later epochs: Full features enabled")
                 self.model.enable_gradient_checkpointing(True)
-
             epoch_start_time = time.time()
             epoch_metrics = {
                 'policy_loss': 0.0,
@@ -1785,24 +1496,17 @@ class GRPOTrainer:
                 'total_reward': 0.0,
                 'batches_processed': 0
             }
-
             if isinstance(self.config, UltraConfig):
                 epoch_metrics['memory_peak'] = 0.0
-
             progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}")
-
             for batch_idx, batch in enumerate(progress_bar):
                 if batch is None:
                     continue
-
                 batch_start_time = time.time()
-
                 try:
                     input_ids = batch['input_ids'].to(device, non_blocking=True)
                     attention_mask = batch['attention_mask'].to(device, non_blocking=True)
                     task_types = batch['task_type']
-
-                    # Generate episodes
                     episodes = []
                     for i in range(len(input_ids)):
                         try:
@@ -1813,125 +1517,87 @@ class GRPOTrainer:
                                 task_type=task_types[i],
                                 epoch=epoch
                             )
-
                             if episode.generated_tokens.numel() > 0:
-                                # Compute reward
                                 generated_text = self.tokenizer.decode(
                                     episode.generated_tokens[0],
                                     skip_special_tokens=True
                                 )
-
                                 reward = self.reward_function.compute_reward(
                                     generated_text,
                                     batch['target_text'][i],
                                     task_types[i]
                                 )
-
                                 episode.rewards = torch.full(
                                     episode.generated_tokens.size(),
                                     reward,
                                     device=device,
                                     dtype=torch.float32
                                 )
-
                                 episodes.append(episode)
                                 epoch_metrics['total_reward'] += reward
-
-                                # Track adaptation scores (ultra mode)
                                 if isinstance(self.config, UltraConfig):
                                     self.training_metrics["adaptation_scores"][task_types[i]].append(reward)
-
                         except Exception as e:
                             logger.error(f"Episode generation failed: {str(e)}")
                             continue
-
                     if not episodes:
                         continue
-
-                    # Compute GRPO loss
                     try:
                         with torch.cuda.amp.autocast(enabled=self.amp_manager.enabled):
                             grpo_loss = self.model.compute_grpo_loss(episodes)
-
                         if not torch.isfinite(grpo_loss):
                             continue
-
-                        # Backward pass
                         optimizers = [self.policy_optimizer]
                         if self.value_optimizer:
                             optimizers.append(self.value_optimizer)
-
-                        amp_success = self.amp_manager.backward_and_unscale(
-                            grpo_loss / self.config.gradient_accumulation_steps,
-                            optimizers
-                        )
-
-                        # Gradient accumulation
+                        scaled_loss = self.amp_manager.scale_loss(grpo_loss / self.config.gradient_accumulation_steps)
+                        self.amp_manager.backward(scaled_loss)
                         if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
                             try:
-                                # Gradient clipping
+                                self.amp_manager.unscale_gradients(optimizers)
                                 grad_norm = torch.nn.utils.clip_grad_norm_(
                                     self.policy_optimizer.param_groups[0]['params'],
                                     self.config.max_grad_norm
                                 )
-
                                 if self.value_optimizer:
                                     torch.nn.utils.clip_grad_norm_(
                                         self.value_optimizer.param_groups[0]['params'],
                                         self.config.max_grad_norm
                                     )
-
-                                # Step optimizers
-                                step_success = self.amp_manager.step_optimizers(optimizers)
-
-                                # Learning rate scheduling
+                                self.amp_manager.step_optimizers(optimizers)
                                 self.policy_scheduler.step()
                                 if self.value_scheduler:
                                     self.value_scheduler.step()
-
-                                # Zero gradients
                                 self.policy_optimizer.zero_grad()
                                 if self.value_optimizer:
                                     self.value_optimizer.zero_grad()
-
                                 global_step += 1
-
-                                # Track gradient norms (ultra mode)
                                 if isinstance(self.config, UltraConfig):
                                     self.training_metrics["gradient_norms"].append(grad_norm.item() if torch.isfinite(grad_norm) else 0.0)
                                     self.training_metrics["learning_rates"].append(self.policy_scheduler.get_last_lr()[0])
-
                             except Exception as optimizer_error:
                                 logger.warning(f"Optimizer step failed: {optimizer_error}")
                                 self.policy_optimizer.zero_grad()
                                 if self.value_optimizer:
                                     self.value_optimizer.zero_grad()
-                                self.amp_manager.reset_state()
                                 continue
-
                     except Exception as loss_error:
                         logger.error(f"Loss computation failed: {loss_error}")
+                        self.policy_optimizer.zero_grad()
+                        if self.value_optimizer:
+                            self.value_optimizer.zero_grad()
                         continue
-
-                    # Update metrics
                     epoch_metrics['policy_loss'] += grpo_loss.item()
                     epoch_metrics['episodes'] += len(episodes)
                     epoch_metrics['batches_processed'] += 1
-
-                    # Memory stats
                     memory_stats = self.model.get_memory_stats()
                     current_memory = memory_stats["gpu_memory_allocated"]
                     self.training_metrics["gpu_memory_usage"].append(current_memory)
-
                     if isinstance(self.config, UltraConfig):
                         epoch_metrics['memory_peak'] = max(epoch_metrics.get('memory_peak', 0), current_memory)
                         self.training_metrics["gpu_utilization"].append(memory_stats["gpu_memory_utilization"])
-
-                    # Batch timing
                     batch_time = time.time() - batch_start_time
                     self.training_metrics["training_speed"].append(batch_time)
-
-                    # Update progress bar
                     avg_reward = epoch_metrics['total_reward'] / max(epoch_metrics['episodes'], 1)
                     progress_info = {
                         'Loss': f'{grpo_loss.item():.4f}',
@@ -1940,38 +1606,25 @@ class GRPOTrainer:
                         'Speed': f'{batch_time:.2f}s',
                         'AMP': 'ON' if self.amp_manager.enabled else 'OFF'
                     }
-
                     if isinstance(self.config, UltraConfig):
                         progress_info['Util'] = f'{memory_stats["gpu_memory_utilization"]:.1f}%'
-
                     if self.amp_manager.enabled:
                         progress_info['Scale'] = f'{self.amp_manager.get_scale():.0f}'
-
                     progress_bar.set_postfix(progress_info)
-
-                    # Periodic memory cleanup
                     if batch_idx % 50 == 0:
                         torch.cuda.empty_cache()
-
-                        # Memory warning (ultra mode)
                         if isinstance(self.config, UltraConfig) and current_memory > 13.5:
-                            logger.warning(f"⚠️  High memory usage: {current_memory:.1f}GB / 15GB")
-
+                            logger.warning(f"⚠️ High memory usage: {current_memory:.1f}GB / 15GB")
                 except Exception as e:
                     logger.error(f"Batch {batch_idx} failed: {str(e)}")
-                    if hasattr(self, 'amp_manager'):
-                        self.amp_manager.reset_state()
                     self.policy_optimizer.zero_grad()
                     if self.value_optimizer:
                         self.value_optimizer.zero_grad()
                     continue
-
-            # End of epoch summary
             epoch_time = time.time() - epoch_start_time
             total_time = time.time() - start_time
             epoch_metrics['policy_loss'] /= max(epoch_metrics['batches_processed'], 1)
             avg_reward = epoch_metrics['total_reward'] / max(epoch_metrics['episodes'], 1)
-
             log_message = (
                 f"Epoch {epoch + 1} completed in {epoch_time:.2f}s:\n"
                 f"  - Avg Policy Loss: {epoch_metrics['policy_loss']:.4f}\n"
@@ -1979,20 +1632,14 @@ class GRPOTrainer:
                 f"  - Avg Reward: {avg_reward:.3f}\n"
                 f"  - Speed: {epoch_time/max(epoch_metrics['batches_processed'], 1):.2f}s/batch"
             )
-
             if isinstance(self.config, UltraConfig):
                 log_message += (
                     f"\n  - Peak Memory: {epoch_metrics['memory_peak']:.2f}GB / 15GB"
                     f"\n  - Total Time: {total_time/3600:.2f}h / 3h"
                     f"\n  - Remaining: {(3*3600 - total_time)/3600:.2f}h"
                 )
-
             logger.info(log_message)
-
-            # Save checkpoint
             self.save_checkpoint(epoch + 1, global_step)
-
-            # Wandb logging
             if self.config.wandb_project:
                 try:
                     log_dict = {
@@ -2004,7 +1651,6 @@ class GRPOTrainer:
                         "episodes_per_epoch": epoch_metrics['episodes'],
                         "batches_per_epoch": epoch_metrics['batches_processed']
                     }
-
                     if isinstance(self.config, UltraConfig):
                         log_dict.update({
                             "total_time_hours": total_time / 3600,
@@ -2012,36 +1658,27 @@ class GRPOTrainer:
                             "gpu_utilization_percent": memory_stats["gpu_memory_utilization"],
                             "learning_rate": self.policy_scheduler.get_last_lr()[0]
                         })
-
-                        # Add task-specific rewards
                         for task, scores in self.training_metrics["adaptation_scores"].items():
                             if scores:
                                 recent_scores = scores[-100:]
                                 log_dict[f"reward_{task}"] = np.mean(recent_scores)
-
                     wandb.log(log_dict)
-
                 except Exception as e:
                     logger.warning(f"Wandb logging failed: {e}")
-
-            # Time check for ultra mode
             if isinstance(self.config, UltraConfig) and total_time > 2.8 * 3600:
                 logger.warning("⏰ Approaching 3-hour limit, wrapping up training...")
                 break
-
         total_training_time = time.time() - start_time
         logger.info(f"Training completed in {total_training_time/3600:.2f} hours!")
-
         if isinstance(self.config, UltraConfig):
             logger.info(f"Final GPU utilization: {torch.cuda.memory_allocated() / (15 * 1e9) * 100:.1f}%")
-
+    
     def save_checkpoint(self, epoch: int, global_step: int):
         """Save checkpoint"""
         checkpoint_path = os.path.join(
             self.config.output_dir,
             f"checkpoint_epoch_{epoch}_step_{global_step}.pt"
         )
-
         try:
             checkpoint = {
                 'epoch': epoch,
@@ -2051,20 +1688,16 @@ class GRPOTrainer:
                 'config': self.config,
                 'training_metrics': self.training_metrics
             }
-
             if self.value_optimizer:
                 checkpoint['value_optimizer_state_dict'] = self.value_optimizer.state_dict()
-
             if isinstance(self.config, UltraConfig):
                 checkpoint.update({
                     'gpu_memory_peak': torch.cuda.max_memory_allocated() / 1e9,
                     'adaptation_params_count': self.model.get_total_adaptation_dim(),
                     'svd_components_count': len(self.model.svd_components)
                 })
-
             torch.save(checkpoint, checkpoint_path)
             logger.info(f"Checkpoint saved to {checkpoint_path}")
-
         except Exception as e:
             logger.error(f"Failed to save checkpoint: {str(e)}")
 
@@ -2075,16 +1708,12 @@ class GRPOTrainer:
 def main():
     """Main execution function"""
     logger.info("Starting Fixed GPT-2 Training Pipeline")
-
-    # Set random seeds
     torch.manual_seed(42)
     np.random.seed(42)
     random.seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42)
-
-    # Choose configuration
-    fast_mode = False  # Set to True for quick testing
+    fast_mode = False
     if fast_mode:
         config = UltraConfig()
         config.num_epochs = 1
@@ -2093,44 +1722,32 @@ def main():
         config.use_fallback_data_only = True
     else:
         config = UltraConfig()
-
     logger.info(f"Configuration: {type(config).__name__}")
     logger.info(f"  Model: {config.model_name}")
     logger.info(f"  Batch Size: {config.batch_size}")
     logger.info(f"  Epochs: {config.num_epochs}")
     logger.info(f"  Mixed Precision: {config.mixed_precision}")
-
     try:
-        # Initialize trainer
         with timer("Trainer initialization"):
             trainer = GRPOTrainer(config)
-
-        # Validate setup
         total_samples = sum(len(data) for data in trainer.datasets.values())
         if total_samples == 0:
             logger.error("No training data loaded!")
             return
-
         logger.info(f"Loaded {total_samples:,} training samples")
-
-        # Start training
         logger.info("Starting training...")
         with timer("Complete training"):
             trainer.train_grpo()
-
         logger.info("Pipeline completed successfully!")
-
     except KeyboardInterrupt:
         logger.warning("Training interrupted by user")
     except Exception as e:
         logger.error(f"Pipeline failed: {str(e)}")
         traceback.print_exc()
     finally:
-        # Cleanup
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
-
         if config.wandb_project:
             try:
                 wandb.finish()
