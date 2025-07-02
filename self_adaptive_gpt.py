@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Fixed GPT-2 Training Pipeline with Robust Mixed Precision
-This version fixes the mixed precision warning, removes argparse, and maintains the indentation fix.
-"""
-
 import subprocess
 import sys
 import warnings
