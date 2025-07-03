@@ -950,8 +950,73 @@ class GRPOTrainer:
             logger.error(f"Collate failed: {e}")
             return None
     
+    def _safe_amp_step(self, loss, accumulated_steps):
+        """Safely handle AMP optimizer step with proper state management"""
+        try:
+            if self.config.mixed_precision:
+                # Scale the loss
+                scaled_loss = self.scaler.scale(loss)
+                scaled_loss.backward()
+                
+                # Only proceed with optimizer step if we've accumulated enough gradients
+                if accumulated_steps >= self.config.gradient_accumulation_steps:
+                    # Check if gradients are finite before unscaling
+                    scaler_state_before = self.scaler.get_scale()
+                    
+                    # Unscale gradients
+                    self.scaler.unscale_(self.optimizer)
+                    
+                    # Clip gradients
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.max_grad_norm
+                    )
+                    
+                    # Step optimizer
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    
+                    # Check if step was successful
+                    step_successful = self.scaler.get_scale() >= scaler_state_before
+                    
+                    if step_successful:
+                        self.scheduler.step()
+                    
+                    # Always zero gradients after attempting a step
+                    self.optimizer.zero_grad()
+                    
+                    return True, step_successful
+            else:
+                # Standard training without AMP
+                loss.backward()
+                
+                if accumulated_steps >= self.config.gradient_accumulation_steps:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.max_grad_norm
+                    )
+                    
+                    self.optimizer.step()
+                    self.scheduler.step()
+                    self.optimizer.zero_grad()
+                    
+                    return True, True
+            
+            return False, False
+            
+        except Exception as e:
+            # On any error, reset everything
+            logger.debug(f"AMP step failed: {e}")
+            self.optimizer.zero_grad()
+            
+            # Reset scaler if needed
+            if self.config.mixed_precision:
+                self.scaler = torch.cuda.amp.GradScaler(enabled=True)
+            
+            return False, False
+
     def train_grpo(self):
-        """Main training loop with proper AMP handling"""
+        """Main training loop with bulletproof AMP handling"""
         logger.info(f"Starting GRPO training with {type(self.config).__name__}")
         
         # Initialize wandb if configured
@@ -1000,7 +1065,9 @@ class GRPOTrainer:
                 'policy_loss': 0.0,
                 'episodes': 0,
                 'total_reward': 0.0,
-                'batches_processed': 0
+                'batches_processed': 0,
+                'successful_steps': 0,
+                'failed_steps': 0
             }
             
             # Create progress bar
@@ -1010,7 +1077,9 @@ class GRPOTrainer:
                 logger.error(f"Failed to create progress bar: {e}")
                 progress_bar = dataloader
             
+            # Reset accumulation state at start of epoch
             accumulated_steps = 0
+            self.optimizer.zero_grad()
             
             for batch_idx, batch in enumerate(progress_bar):
                 if batch is None:
@@ -1018,6 +1087,7 @@ class GRPOTrainer:
                     continue
                 
                 batch_start_time = time.time()
+                batch_success = False
                 
                 try:
                     # Move data to device
@@ -1081,48 +1151,27 @@ class GRPOTrainer:
                     # Scale loss for gradient accumulation
                     scaled_loss = grpo_loss / self.config.gradient_accumulation_steps
                     
-                    # Backward pass
-                    if self.config.mixed_precision:
-                        self.scaler.scale(scaled_loss).backward()
-                    else:
-                        scaled_loss.backward()
-                    
+                    # Increment accumulation counter
                     accumulated_steps += 1
                     
-                    # Optimizer step when accumulation is complete
-                    if accumulated_steps >= self.config.gradient_accumulation_steps:
-                        if self.config.mixed_precision:
-                            # Unscale gradients and clip
-                            self.scaler.unscale_(self.optimizer)
-                            torch.nn.utils.clip_grad_norm_(
-                                self.model.parameters(),
-                                self.config.max_grad_norm
-                            )
-                            
-                            # Optimizer step
-                            self.scaler.step(self.optimizer)
-                            self.scaler.update()
+                    # Use safe AMP step
+                    step_taken, step_successful = self._safe_amp_step(scaled_loss, accumulated_steps)
+                    
+                    if step_taken:
+                        if step_successful:
+                            epoch_metrics['successful_steps'] += 1
+                            global_step += 1
                         else:
-                            # Standard training without AMP
-                            torch.nn.utils.clip_grad_norm_(
-                                self.model.parameters(),
-                                self.config.max_grad_norm
-                            )
-                            self.optimizer.step()
+                            epoch_metrics['failed_steps'] += 1
                         
-                        # Update learning rate
-                        self.scheduler.step()
-                        
-                        # Zero gradients
-                        self.optimizer.zero_grad()
-                        
+                        # Reset accumulation counter after step
                         accumulated_steps = 0
-                        global_step += 1
                     
                     # Update metrics
                     epoch_metrics['policy_loss'] += grpo_loss.item()
                     epoch_metrics['episodes'] += len(episodes)
                     epoch_metrics['batches_processed'] += 1
+                    batch_success = True
                     
                     # Memory tracking
                     memory_stats = self.model.get_memory_stats()
@@ -1140,7 +1189,7 @@ class GRPOTrainer:
                             'Loss': f'{grpo_loss.item():.4f}',
                             'Reward': f'{avg_reward:.3f}',
                             'GPU': f'{current_memory:.1f}GB',
-                            'Time': f'{batch_time:.2f}s'
+                            'Steps': f"{epoch_metrics['successful_steps']}/{epoch_metrics['successful_steps'] + epoch_metrics['failed_steps']}"
                         }
                         
                         if self.config.mixed_precision:
@@ -1158,35 +1207,37 @@ class GRPOTrainer:
                 
                 except Exception as e:
                     logger.error(f"Batch {batch_idx} failed: {str(e)}")
-                    # Reset gradients on error
-                    self.optimizer.zero_grad()
-                    accumulated_steps = 0
-                    continue
+                    batch_success = False
+                
+                finally:
+                    # Always ensure clean state after each batch
+                    if not batch_success:
+                        # Reset everything on batch failure
+                        self.optimizer.zero_grad()
+                        accumulated_steps = 0
+                        
+                        # Reset scaler if AMP is enabled
+                        if self.config.mixed_precision:
+                            self.scaler = torch.cuda.amp.GradScaler(enabled=True)
             
-            # Handle remaining accumulated gradients
+            # Handle any remaining accumulated gradients at end of epoch
             if accumulated_steps > 0:
+                logger.info(f"Processing remaining {accumulated_steps} accumulated steps")
                 try:
-                    if self.config.mixed_precision:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(),
-                            self.config.max_grad_norm
-                        )
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(),
-                            self.config.max_grad_norm
-                        )
-                        self.optimizer.step()
+                    # Create a dummy loss for the final step
+                    dummy_loss = torch.tensor(0.1, requires_grad=True, device=device)
+                    step_taken, step_successful = self._safe_amp_step(dummy_loss, self.config.gradient_accumulation_steps)
                     
-                    self.scheduler.step()
+                    if step_taken and step_successful:
+                        epoch_metrics['successful_steps'] += 1
+                        global_step += 1
                     
                 except Exception as e:
-                    logger.error(f"Final optimizer step failed: {e}")
+                    logger.warning(f"Final gradient step failed: {e}")
                 finally:
+                    # Ensure clean state
                     self.optimizer.zero_grad()
+                    accumulated_steps = 0
             
             # Epoch summary
             epoch_time = time.time() - epoch_start_time
@@ -1201,6 +1252,8 @@ class GRPOTrainer:
                     f"  - Avg Policy Loss: {epoch_metrics['policy_loss']:.4f}\n"
                     f"  - Episodes: {epoch_metrics['episodes']:,}\n"
                     f"  - Avg Reward: {avg_reward:.3f}\n"
+                    f"  - Successful Steps: {epoch_metrics['successful_steps']}\n"
+                    f"  - Failed Steps: {epoch_metrics['failed_steps']}\n"
                     f"  - Batches Processed: {epoch_metrics['batches_processed']}\n"
                     f"  - Total Time: {total_time/60:.1f}min"
                 )
@@ -1217,6 +1270,8 @@ class GRPOTrainer:
                             "epoch_time": epoch_time,
                             "gpu_memory_gb": memory_stats["gpu_memory_allocated"],
                             "episodes_per_epoch": epoch_metrics['episodes'],
+                            "successful_steps": epoch_metrics['successful_steps'],
+                            "failed_steps": epoch_metrics['failed_steps'],
                             "learning_rate": self.scheduler.get_last_lr()[0]
                         }
                         wandb.log(log_dict)
