@@ -18,7 +18,6 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any, Union
 from collections import defaultdict
 from transformers import GPT2LMHeadModel, GPT2Tokenizer, get_cosine_schedule_with_warmup
-from transformers.cache_utils import DynamicCache
 from datasets import load_dataset
 import wandb
 from datetime import datetime
@@ -153,7 +152,7 @@ class ExpertMixingSystem(nn.Module):
         self.mixing_network = nn.Sequential(
             nn.Linear(hidden_size + 4, 128),  # +4 for task properties
             nn.ReLU(),
-            nn.Dropout(1),
+            nn.Dropout(0.1),
             nn.Linear(128, 64),
             nn.ReLU(),
             nn.Linear(64, max_experts),
@@ -395,7 +394,7 @@ class UltraConfig(BaseConfig):
     max_length: int = 384
     adaptation_rank: int = 32
     num_experts: int = 8
-    enable_paged_attention: bool = True
+    enable_paged_attention: bool = False  # Disable paged attention for now
     paged_block_size: int = 32
     max_cache_blocks: int = 1500
     max_samples_per_dataset: int = 1000
@@ -439,94 +438,29 @@ class UltraConfig(BaseConfig):
     })
 
 # ============================================================================
-# PAGED ATTENTION MODULE
+# PAGED ATTENTION MODULE (DISABLED FOR NOW)
 # ============================================================================
 
 class PagedGPT2Attention(nn.Module):
-    """Paged attention module with KV caching - Fixed GPT2 compatibility"""
+    """Paged attention module with KV caching - Temporarily disabled"""
     
     def __init__(self, original_attn, config):
         super().__init__()
-        self.config = config
         self.original_attn = original_attn
-        self.device = next(original_attn.parameters()).device
         
-        self.embed_dim = original_attn.embed_dim
-        self.num_heads = original_attn.num_heads
-        self.head_dim = self.embed_dim // self.num_heads
-        self.split_size = self.head_dim
-        
-        self.scale = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(self.device)
-        
-        if hasattr(original_attn, 'masked_bias'):
-            self.masked_bias = original_attn.masked_bias
-        else:
-            self.register_buffer('masked_bias', torch.tensor(-1e4).to(self.device))
-        
-        self.c_attn = original_attn.c_attn
-        self.c_proj = original_attn.c_proj
-        self.attn_dropout = original_attn.attn_dropout
-        self.resid_dropout = original_attn.resid_dropout
-        
-        self.kv_cache = PagedKVCache(
-            max_seq_len=config.max_length * 2,
-            hidden_size=self.embed_dim,
-            num_heads=self.num_heads,
-            block_size=config.paged_block_size,
-            max_blocks=config.max_cache_blocks
-        )
-        
-        logger.debug(f"Initialized PagedGPT2Attention with embed_dim={self.embed_dim}, num_heads={self.num_heads}")
-    
-    def forward(self, hidden_states, attention_mask=None, head_mask=None,
-                encoder_hidden_states=None, encoder_attention_mask=None, use_cache=False,
-                output_attentions=False, past_key_value=None, **kwargs):
-        """Forward pass with paged attention"""
-        
-        if self.training:
-            return self.original_attn(
-                hidden_states=hidden_states,
-                attention_mask=attention_mask,
-                head_mask=head_mask,
-                encoder_hidden_states=encoder_hidden_states,
-                encoder_attention_mask=encoder_attention_mask,
-                use_cache=use_cache,
-                output_attentions=output_attentions,
-                past_key_value=past_key_value
-            )
-        
-        batch_size, seq_len = hidden_states.shape[:2]
-        seq_id = f"seq_{batch_size}_{seq_len}"
-        
-        if not self.kv_cache.has_sequence(seq_id):
-            self.kv_cache.allocate_sequence(seq_id, seq_len)
-        
-        outputs = self.original_attn(
-            hidden_states=hidden_states,
-            attention_mask=attention_mask,
-            head_mask=head_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            use_cache=use_cache,
-            output_attentions=output_attentions,
-            past_key_value=past_key_value
-        )
-        return outputs
+    def forward(self, *args, **kwargs):
+        """Forward pass - just use original attention for now"""
+        return self.original_attn(*args, **kwargs)
 
 class PagedKVCache:
     def __init__(self, max_seq_len, hidden_size, num_heads, block_size, max_blocks):
-        self.max_seq_len = max_seq_len
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.block_size = block_size
-        self.max_blocks = max_blocks
         self.cache = {}
 
     def has_sequence(self, seq_id):
         return seq_id in self.cache
 
     def allocate_sequence(self, seq_id, seq_len):
-        self.cache[seq_id] = torch.zeros((self.num_heads, seq_len, self.hidden_size // self.num_heads))
+        self.cache[seq_id] = torch.zeros((1, seq_len, 1))
 
 # ============================================================================
 # DATA HANDLING CLASSES
@@ -620,7 +554,6 @@ class DatasetLoader:
             {'name': 'ag_news', 'split': 'train[:800]', 'task_type': 'reasoning', 'process_fn': self._process_ag_news},
             {'name': 'yelp_polarity', 'split': 'train[:600]', 'task_type': 'other', 'process_fn': self._process_yelp},
             {'name': 'snli', 'split': 'train[:800]', 'task_type': 'reasoning', 'process_fn': self._process_snli},
-            {'name': 'mnli', 'split': 'train[:600]', 'task_type': 'reasoning', 'process_fn': self._process_mnli},
             {'name': 'boolq', 'split': 'train[:600]', 'task_type': 'reasoning', 'process_fn': self._process_boolq},
             {'name': 'piqa', 'split': 'train[:600]', 'task_type': 'reasoning', 'process_fn': self._process_piqa},
             {'name': 'gsm8k', 'split': 'train[:400]', 'task_type': 'math', 'process_fn': self._process_gsm8k, 'config': 'main'},
@@ -648,6 +581,15 @@ class DatasetLoader:
                         dataset = load_dataset(
                             dataset_config['name'], 
                             dataset_config['subset'],
+                            split=dataset_config['split'],
+                            download_mode="reuse_cache_if_exists",
+                            verification_mode="no_checks"
+                        )
+                        processed_data = dataset_config['process_fn'](dataset)
+                    elif 'config' in dataset_config:
+                        dataset = load_dataset(
+                            dataset_config['name'],
+                            dataset_config['config'],
                             split=dataset_config['split'],
                             download_mode="reuse_cache_if_exists",
                             verification_mode="no_checks"
@@ -818,27 +760,6 @@ class DatasetLoader:
                 premise = item.get('premise', '').strip()
                 hypothesis = item.get('hypothesis', '').strip()
                 label = item.get('label', -1)
-                
-                if premise and hypothesis and label != -1:
-                    target = label_map.get(label, 'neutral')
-                    processed.append((
-                        f"Premise: {premise}\nHypothesis: {hypothesis}\nRelation:", 
-                        target, 'reasoning'
-                    ))
-            except:
-                continue
-        
-        return processed
-    
-    def _process_mnli(self, dataset):
-        """Process MNLI dataset"""
-        processed = []
-        label_map = {0: 'entailment', 1: 'neutral', 2: 'contradiction'}
-        
-        for item in dataset:
-            try:
-                premise = item.get('premise', '').strip()
-                hypothesis = item.get(' SRShypothesis', '').        label = item.get('label', -1)
                 
                 if premise and hypothesis and label != -1:
                     target = label_map.get(label, 'neutral')
@@ -1491,9 +1412,7 @@ class TransformerSquaredGPT2(nn.Module):
                     logger.debug(f"Value estimation failed: {e}")
                     values = torch.zeros(input_ids.size(0), device=device)
                 
-                # Use DynamicCache for past_key_value to avoid layer_past conflict
-                past_key_value = DynamicCache()
-                
+                # Fixed: Remove the problematic past_key_value parameter
                 generated = self.base_model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -1507,8 +1426,7 @@ class TransformerSquaredGPT2(nn.Module):
                     eos_token_id=self.base_model.config.eos_token_id,
                     return_dict_in_generate=True,
                     output_scores=True,
-                    use_cache=True,
-                    past_key_value=past_key_value
+                    use_cache=True
                 )
                 
                 generated_tokens = generated.sequences[:, input_ids.size(1):]
@@ -2183,4 +2101,4 @@ def main():
         logger.info("✓ Cleanup completed")
 
 if __name__ == "__main__":
-    main() 
+    main()
